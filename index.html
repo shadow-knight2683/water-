@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AquaMap | Hyderabad Water Access Explorer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="">
+/* Enhancement pack: image search, Google Maps drop-off search, menu, theme, scroll reveals */
+const menuToggle=$('#menuToggle'),menuDropdown=$('#menuDropdown');
+menuToggle?.addEventListener('click',()=>{const open=menuDropdown.classList.toggle('open');menuToggle.setAttribute('aria-expanded',String(open));menuToggle.textContent=open?'×':'☰'});
+document.addEventListener('click',e=>{if(menuDropdown&&!e.target.closest('.top-actions')){menuDropdown.classList.remove('open');menuToggle?.setAttribute('aria-expanded','false');if(menuToggle)menuToggle.textContent='☰'}});
+function closeMenu(){menuDropdown?.classList.remove('open');menuToggle?.setAttribute('aria-expanded','false');if(menuToggle)menuToggle.textContent='☰'}
+function openImageSearch(){
+  const q=($('#searchInput')?.value||'').trim()||'public drinking water refill station Hyderabad';
+  window.open('https://www.google.com/search?tbm=isch&q='+encodeURIComponent(q),'_blank','noopener,noreferrer');
+  toast('Opening image results in a new tab.');
+  closeMenu();
+}
+function openDropoffSearch(){
+  const q='recycling and waste drop-off points near me';
+  // Google Maps can use "near me" directly; browser location can optionally refine the search.
+  if(navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(pos=>{
+      const query=encodeURIComponent('recycling and waste drop-off points near '+pos.coords.latitude+','+pos.coords.longitude);
+      window.open('https://www.google.com/maps/search/?api=1&query='+query,'_blank','noopener,noreferrer');
+    },()=>window.open('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(q+' Hyderabad'),'_blank','noopener,noreferrer'),{timeout:5000});
+  }else window.open('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(q+' Hyderabad'),'_blank','noopener,noreferrer');
+  toast('Finding nearby drop-off locations on Google Maps.');
+  closeMenu();
+}
+$('#imageSearchBtn')?.addEventListener('click',openImageSearch);
+$('#menuImageSearch')?.addEventListener('click',openImageSearch);
+$('#dropoffBtn')?.addEventListener('click',openDropoffSearch);
+$('#menuDropoff')?.addEventListener('click',openDropoffSearch);
+$('#menuAdd')?.addEventListener('click',()=>{closeMenu();openModal('add')});
+$('#menuReport')?.addEventListener('click',()=>{closeMenu();openModal('report')});
+const themeToggle=$('#themeToggle');
+function setTheme(light){
+  document.body.classList.toggle('light-theme',light);
+  if(themeToggle){themeToggle.textContent=light?'☾ Dark mode':'☀ Light mode';themeToggle.setAttribute('aria-label',light?'Switch to dark theme':'Switch to light theme');}
+  try{localStorage.setItem('aquamap_theme',light?'light':'dark')}catch(e){}
+  if(realMapOn&&leafletMap)toast('Theme changed. Map tiles remain in their provider style.');
+}
+try{setTheme(localStorage.getItem('aquamap_theme')==='light')}catch(e){setTheme(false)}
+themeToggle?.addEventListener('click',()=>setTheme(!document.body.classList.contains('light-theme')));
+// Scroll-triggered reveal animation; content remains visible if IntersectionObserver is unavailable.
+$$('.hero,.demo-banner,.stat,.map-panel,.side-panel,.footer').forEach(el=>el.classList.add('reveal'));
+if('IntersectionObserver' in window){
+  const revealObserver=new IntersectionObserver(entries=>entries.forEach(entry=>{if(entry.isIntersecting){entry.target.classList.add('in-view');revealObserver.unobserve(entry.target)}}),{threshold:.08});
+  $$('.reveal').forEach(el=>revealObserver.observe(el));
+}else $$('.reveal').forEach(el=>el.classList.add('in-view'));
+
+</script>
+<style>
+:root{
+  --navy:#050b14;
+  --teal:#0284c7;
+  --mint:#0f172a;
+  --ink:#f8fafc;
+  --muted:#94a3b8;
+  --paper:#090d16;
+  --line:#1e293b;
+  --white:#ffffff;
+  --orange:#f59e0b;
+  --red:#ef4444;
+  --green:#10b981;
+  --blue:#38bdf8;
+  --purple:#a855f7;
+  box-sizing:border-box;
+}
+*{box-sizing:inherit}
+body{margin:0;background:var(--paper);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink)}
+button,input,select,textarea{font:inherit}
+button{cursor:pointer}
+.app{min-height:100vh}
+
+.topbar{height:76px;background:#0b1325;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 clamp(18px,4vw,58px);gap:20px;position:sticky;top:0;z-index:5}
+.brand{display:flex;align-items:center;gap:11px;min-width:max-content}
+.logo{height:42px;width:42px;border-radius:14px;background:var(--teal);display:grid;place-items:center;color:white;font-size:23px;box-shadow:0 6px 15px #0284c735}
+.brand h1{font-size:21px;letter-spacing:-.7px;margin:0;color:var(--white)}
+.brand small{display:block;color:var(--muted);font-size:10px;letter-spacing:1.5px;text-transform:uppercase;margin-top:2px}
+
+.search{max-width:510px;flex:1;position:relative}
+.search input{width:100%;border:1px solid var(--line);border-radius:13px;padding:13px 16px 13px 42px;background:#050b14;color:var(--white);outline:none}
+.search input:focus{border-color:var(--teal);box-shadow:0 0 0 3px #0284c728}
+.search span{position:absolute;left:15px;top:11px;color:var(--muted);font-size:18px}
+
+.top-actions{display:flex;gap:10px;align-items:center}
+.btn{border:0;border-radius:11px;padding:11px 15px;font-weight:700;font-size:13px;transition:.18s}
+.btn-primary{background:var(--teal);color:white}
+.btn-primary:hover{background:#026aa2;transform:translateY(-1px)}
+.btn-light{background:#111c33;color:var(--blue);border:1px solid var(--line)}
+.btn-light:hover{background:#182645}
+.avatar{width:39px;height:39px;border-radius:50%;background:#111c33;color:var(--blue);display:grid;place-items:center;font-weight:800;border:1px solid var(--line)}
+
+.hero{padding:29px clamp(18px,4vw,58px) 20px;display:flex;align-items:flex-end;justify-content:space-between;gap:20px}
+.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:1.8px;color:var(--blue);font-weight:800}
+.hero h2{font-size:clamp(27px,3.4vw,40px);letter-spacing:-1.7px;margin:8px 0 7px;line-height:1.08;color:var(--white)}
+.hero p{color:var(--muted);margin:0;max-width:600px;line-height:1.6;font-size:14px}
+
+.live-pill{display:flex;align-items:center;gap:8px;padding:10px 13px;border:1px solid var(--line);background:#0b1325;border-radius:30px;color:var(--muted);font-size:12px;white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:50%;background:#10b981;box-shadow:0 0 0 4px #10b98122}
+
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;padding:0 clamp(18px,4vw,58px) 22px}
+.stat{background:#0b1325;border:1px solid var(--line);border-radius:16px;padding:17px 18px;display:flex;align-items:center;gap:13px}
+.stat-icon{width:42px;height:42px;display:grid;place-items:center;border-radius:13px;background:#111c33;font-size:21px;flex-shrink:0;color:var(--blue)}
+.stat:nth-child(2) .stat-icon{background:#111c33;color:var(--blue)}
+.stat:nth-child(3) .stat-icon{background:#111c33;color:var(--teal)}
+.stat:nth-child(4) .stat-icon{background:#111c33;color:var(--orange)}
+.stat strong{font-size:24px;letter-spacing:-.8px;display:block;color:var(--white)}
+.stat span{font-size:11px;color:var(--muted);display:block;margin-top:2px}
+
+.main{padding:0 clamp(18px,4vw,58px) 45px;display:grid;grid-template-columns:minmax(0,1fr) 315px;gap:19px}
+.map-panel,.side-panel{background:#0b1325;border:1px solid var(--line);border-radius:18px;overflow:hidden;min-width:0}
+.panel-head{padding:18px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}
+.panel-head h3{margin:0;font-size:15px;letter-spacing:-.3px;color:var(--white)}
+.panel-head p{margin:4px 0 0;font-size:11px;color:var(--muted)}
+.map-tools{display:flex;gap:7px}
+.icon-btn{height:35px;width:35px;border:1px solid var(--line);border-radius:10px;background:#111c33;color:var(--white);font-size:16px}
+
+.layers{padding:13px 18px;display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+.layer{border:1px solid var(--line);border-radius:30px;background:#111c33;padding:8px 11px;display:flex;align-items:center;gap:7px;color:var(--muted);font-size:11px;font-weight:700}
+.layer.active{border-color:var(--teal);background:#07263b;color:var(--blue)}
+.layer .key{width:8px;height:8px;border-radius:50%;background:var(--blue)}
+.layer[data-layer="taps"] .key{background:var(--green)}
+.layer[data-layer="kiosks"] .key{background:var(--purple)}
+.layer[data-layer="waste"] .key{background:var(--red)}
+.layer[data-layer="colonies"] .key{background:#f59e0b}
+
+.map-wrap{position:relative;height:490px;overflow:hidden;background:#050b14}
+.map-art{position:absolute;inset:0;width:100%;height:100%}
+.map-art .road{fill:none;stroke:#132238;stroke-width:12;stroke-linecap:round}
+.map-art .minor{fill:none;stroke:#101a2b;stroke-width:6;stroke-linecap:round}
+.map-art .waterway{fill:none;stroke:#033454;stroke-width:21;opacity:.8}
+.map-art text{font-family:inherit;fill:#475569;font-size:11px;letter-spacing:.5px}
+.map-art .park{fill:#0b192c}
+.map-art .block{fill:#0e1726;stroke:#182436;stroke-width:1}
+.map-art .block2{fill:#0a101d;stroke:#152030;stroke-width:1}
+.map-art .zone{fill:#0284c7;fill-opacity:.15;stroke:#0284c7;stroke-width:2;stroke-dasharray:6 4}
+.map-art .zone-off{fill:#f59e0b;fill-opacity:.15;stroke:#f59e0b;stroke-width:2;stroke-dasharray:6 4}
+
+.pin{position:absolute;border:0;border-radius:50% 50% 50% 8px;transform:translate(-50%,-50%) rotate(-45deg);width:34px;height:34px;color:white;display:grid;place-items:center;box-shadow:0 4px 9px #00000055;z-index:2;transition:.15s}
+.pin span{transform:rotate(45deg);font-size:15px}
+.pin:hover,.pin.selected{transform:translate(-50%,-50%) rotate(-45deg) scale(1.17);z-index:3}
+.pin.drinking{background:var(--blue)}
+.pin.taps{background:var(--green)}
+.pin.kiosks{background:var(--purple)}
+.pin.waste{background:var(--red)}
+.pin.hidden{display:none}
+
+.map-label{position:absolute;z-index:1;font-size:10px;color:var(--muted);font-weight:800;letter-spacing:.7px;text-shadow:0 1px #050b14}
+.map-label small{display:block;font-weight:500;letter-spacing:0;font-size:9px;margin-top:3px;color:#64748b}
+
+.map-fab{position:absolute;right:15px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:4}
+.fab{width:42px;height:42px;border-radius:13px;border:1px solid var(--line);background:#111c33;box-shadow:0 3px 12px #00000033;color:var(--white);font-size:18px}
+.fab.report{background:var(--teal);color:white;border:0;font-size:22px}
+
+.map-legend{position:absolute;left:14px;bottom:15px;background:#0b1325ee;border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:7px;font-size:10px;color:var(--muted);z-index:2;box-shadow:0 4px 14px #00000044;backdrop-filter:blur(8px)}
+.legend-item{display:flex;align-items:center;gap:7px}
+.legend-dot{height:8px;width:8px;border-radius:50%}
+
+.detail{padding:16px 19px;display:grid;grid-template-columns:1fr auto;align-items:center;gap:12px;border-top:1px solid var(--line);background:#0b1325}
+.detail h4{font-size:14px;margin:0 0 5px;color:var(--white)}
+.detail p{font-size:11px;color:var(--muted);margin:0;line-height:1.5}
+.status{display:inline-flex;align-items:center;gap:5px;border-radius:20px;background:#064e3b55;color:#34d399;padding:5px 8px;font-size:10px;font-weight:800;white-space:nowrap;border:1px solid #05966955}
+.detail-actions{display:flex;gap:7px;grid-column:1/-1}
+.detail-actions button{font-size:11px;padding:9px 12px}
+
+.side-panel{align-self:start}
+.side-section{padding:17px 18px;border-bottom:1px solid var(--line)}
+.side-section:last-child{border-bottom:0}
+.side-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:13px}
+.side-title h3{font-size:14px;margin:0;color:var(--white)}
+.side-title button{border:0;background:none;color:var(--blue);font-size:11px;font-weight:800}
+
+.station{display:flex;gap:11px;align-items:flex-start;padding:11px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.station:last-child{border-bottom:0;padding-bottom:0}
+.station-icon{width:37px;height:37px;border-radius:12px;display:grid;place-items:center;flex-shrink:0;background:#111c33;font-size:18px;color:var(--blue);border:1px solid var(--line)}
+.station h4{font-size:12px;margin:1px 0 4px;color:var(--white)}
+.station p{font-size:10px;line-height:1.5;color:var(--muted);margin:0}
+.distance{font-size:10px;color:var(--blue);font-weight:800;white-space:nowrap;margin-left:auto;padding-top:3px}
+
+.notice{background:#1a150c;border:1px solid #3d2c12;border-radius:13px;padding:12px;margin-top:12px}
+.notice strong{font-size:11px;display:block;color:#f59e0b}
+.notice p{font-size:10px;line-height:1.5;color:#d97706;margin:5px 0 0}
+
+.impact-card{background:linear-gradient(135deg,#071426,#0b1d3a);border-radius:15px;padding:16px;color:white;border:1px solid var(--line)}
+.impact-card .mini{font-size:10px;color:var(--blue);text-transform:uppercase;letter-spacing:1.3px;font-weight:800}
+.impact-card strong{font-size:28px;display:block;margin:9px 0 3px;letter-spacing:-1px;color:var(--white)}
+.impact-card p{font-size:10px;line-height:1.5;color:var(--muted);margin:0}
+.progress{height:5px;background:#ffffff15;border-radius:10px;margin-top:13px;overflow:hidden}
+.progress span{display:block;height:100%;width:64%;background:var(--teal);border-radius:10px}
+
+.footer{padding:0 clamp(18px,4vw,58px) 28px;color:var(--muted);font-size:10px;display:flex;justify-content:space-between;gap:15px}
+.footer strong{color:var(--white)}
+
+.toast{position:fixed;bottom:22px;left:50%;transform:translate(-50%,20px);background:#111c33;color:white;padding:12px 17px;border-radius:12px;box-shadow:0 10px 35px #00000077;font-size:12px;opacity:0;pointer-events:none;transition:.25s;z-index:20;border:1px solid var(--line)}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+.modal-backdrop{position:fixed;inset:0;background:#000000aa;backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;padding:20px;z-index:10}
+.modal-backdrop.open{display:flex}
+.modal{width:min(460px,100%);background:#0b1325;border-radius:20px;padding:24px;box-shadow:0 20px 80px #000000aa;border:1px solid var(--line);color:var(--white)}
+.modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.modal h3{margin:0;font-size:21px;letter-spacing:-.6px;color:var(--white)}
+.close{border:0;background:#111c33;width:32px;height:32px;border-radius:10px;font-size:18px;color:var(--white);border:1px solid var(--line)}
+.modal>p{font-size:12px;line-height:1.6;color:var(--muted);margin:8px 0 18px}
+.field{display:block;font-size:11px;font-weight:800;color:var(--muted);margin:13px 0 6px}
+.modal input,.modal select,.modal textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:11px 12px;background:#050b14;outline:none;color:var(--white)}
+.modal textarea{min-height:82px;resize:vertical}
+.modal .btn{width:100%;margin-top:16px;padding:13px}
+
+.mobile-nav{display:none}
+
+@media(max-width:1000px){
+  .main{grid-template-columns:minmax(0,1fr) 280px}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .search{max-width:360px}
+  .map-wrap{height:450px}
+}
+@media(max-width:760px){
+  .topbar{height:auto;min-height:70px;flex-wrap:wrap;padding:14px 17px;gap:12px}
+  .brand{flex:1}
+  .top-actions .btn{display:none}
+  .search{order:3;flex-basis:100%;max-width:none}
+  .hero{padding:24px 18px 18px;align-items:flex-start;flex-direction:column}
+  .hero h2{font-size:32px}
+  .stats{padding:0 18px 18px;gap:9px}
+  .stat{padding:13px;gap:10px}
+  .stat-icon{height:36px;width:36px;font-size:18px}
+  .stat strong{font-size:21px}
+  .main{padding:0 18px 30px;grid-template-columns:1fr}
+  .map-wrap{height:410px}
+  .side-panel{display:grid;grid-template-columns:1fr 1fr}
+  .side-section{padding:15px;border-bottom:1px solid var(--line)}
+  .side-section:nth-child(2){border-right:0}
+  .side-section:last-child{grid-column:1/-1}
+  .footer{padding:0 18px 80px;flex-direction:column}
+  .mobile-nav{position:fixed;bottom:0;left:0;right:0;background:#0b1325ee;backdrop-filter:blur(10px);border-top:1px solid var(--line);padding:9px 12px calc(9px + env(safe-area-inset-bottom));display:flex;justify-content:space-around;z-index:6}
+  .mobile-nav button{background:none;border:0;color:var(--muted);font-size:10px;display:flex;flex-direction:column;align-items:center;gap:4px}
+  .mobile-nav button span{font-size:19px}
+  .mobile-nav button.active{color:var(--blue);font-weight:800}
+}
+
+.demo-banner{margin:0 clamp(18px,4vw,58px) 20px;padding:13px 16px;display:flex;gap:11px;align-items:flex-start;background:#071c33;border:1px solid #0c3359;border-radius:14px;color:#38bdf8}
+.demo-icon{display:grid;place-items:center;flex:0 0 25px;height:25px;border-radius:8px;background:#0f2b4c;font-weight:900;color:#38bdf8}
+.demo-banner strong{display:block;font-size:12px;margin-bottom:3px;color:var(--white)}
+.demo-banner span:not(.demo-icon){display:block;color:var(--muted);font-size:11px;line-height:1.5}
+
+#reportForm .form-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+#reportForm .form-row input{width:100%;min-width:0}
+#realMap .leaflet-popup-content{font-family:inherit;color:#0f172a;font-size:12px;line-height:1.5}
+.search-results{position:absolute;left:0;right:0;top:calc(100% + 6px);background:#0b1325;border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 25px #00000088;z-index:8;display:none;overflow:hidden}
+.search-results button{display:block;width:100%;border:0;background:#0b1325;text-align:left;padding:11px 14px;font-size:12px;color:var(--white)}
+.search-results button:hover{background:#111c33}
+.search-results small{display:block;color:var(--muted);margin-top:3px}
+.empty-results{padding:12px;font-size:12px;color:var(--muted)}
+.data-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.data-actions button{font-size:10px;padding:8px 10px}
+.small-note{font-size:10px;color:var(--muted);line-height:1.5;margin-top:9px}
+@media(max-width:480px){.side-panel{grid-template-columns:1fr}.side-section:last-child{grid-column:auto}.panel-head{flex-wrap:wrap}.map-tools{flex-wrap:wrap}.detail{grid-template-columns:1fr}.detail-actions{flex-wrap:wrap}.map-wrap{height:380px}.stat strong{font-size:19px}}
+
+/* Added responsive controls, accessible themes and motion */
+.top-actions{position:relative}
+.hamburger{display:grid;place-items:center;font-size:18px;flex-shrink:0}
+.menu-dropdown{display:none;position:absolute;right:0;top:calc(100% + 10px);width:245px;background:#0b1325;border:1px solid var(--line);border-radius:14px;padding:7px;box-shadow:0 18px 45px #0008;z-index:12}
+.menu-dropdown.open{display:block;animation:menuIn .18s ease-out}
+.menu-dropdown button{display:block;width:100%;text-align:left;border:0;border-radius:9px;background:transparent;color:var(--white);padding:12px;font-size:12px}
+.menu-dropdown button:hover{background:#111c33}
+@keyframes menuIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+.reveal{opacity:0;transform:translateY(16px);transition:opacity .55s ease,transform .55s cubic-bezier(.2,.7,.2,1)}
+.reveal.in-view{opacity:1;transform:translateY(0)}
+.stat,.map-panel,.side-panel,.demo-banner{transition:transform .22s ease,border-color .22s ease,box-shadow .22s ease}
+.stat:hover{transform:translateY(-3px);border-color:#0284c7;box-shadow:0 10px 28px #0002}
+.layer{transition:transform .18s ease,background .18s ease,border-color .18s ease}
+.layer:hover{transform:translateY(-2px)}
+.pin{animation:pinPop .35s ease-out both}
+@keyframes pinPop{from{opacity:.3;scale:.7}to{opacity:1;scale:1}}
+body.light-theme{--paper:#f3f7fa;--ink:#132238;--muted:#536579;--line:#d7e1e8;--white:#132238;--blue:#087eaa;--teal:#087eaa}
+body.light-theme .topbar,body.light-theme .stat,body.light-theme .map-panel,body.light-theme .side-panel,body.light-theme .panel-head,body.light-theme .detail,body.light-theme .live-pill,body.light-theme .modal,body.light-theme .menu-dropdown{background:#fff;color:#132238}
+body.light-theme .search input,body.light-theme .modal input,body.light-theme .modal select,body.light-theme .modal textarea{background:#f5f8fb;color:#132238}
+body.light-theme .btn-light,body.light-theme .icon-btn,body.light-theme .layer,body.light-theme .station-icon,body.light-theme .avatar,body.light-theme .close{background:#edf3f7;color:#176a8a}
+body.light-theme .search-results,body.light-theme .search-results button{background:#fff;color:#132238}
+body.light-theme .search-results button:hover,body.light-theme .menu-dropdown button:hover{background:#edf3f7}
+body.light-theme .map-legend{background:#ffffffed;color:#334155}
+body.light-theme .map-art rect{fill:#edf3f7}
+body.light-theme .map-art .road{stroke:#d2dee8}
+body.light-theme .map-art .minor{stroke:#dce6ed}
+body.light-theme .map-art .block{fill:#e4edf3;stroke:#d1dee7}
+body.light-theme .map-art .block2{fill:#f8fbfd;stroke:#dce6ed}
+body.light-theme .map-art .park{fill:#dcefe7}
+body.light-theme .map-art text{fill:#64748b}
+body.light-theme .notice{background:#fff8e8;border-color:#f1d7a5}
+body.light-theme .impact-card{background:linear-gradient(135deg,#e4f3f8,#f6fbfd);color:#132238}
+body.light-theme .impact-card strong,body.light-theme .impact-card p{color:#334155}
+body.light-theme .demo-banner{background:#eaf7fc;border-color:#c2e9f6}
+body.light-theme .demo-banner strong{color:#132238}
+body.light-theme .demo-banner span:not(.demo-icon){color:#536579}
+@media(max-width:760px){.top-actions{width:auto;gap:6px}.top-actions #shareBtn,.top-actions #addTop,.top-actions #imageSearchBtn{display:none}.top-actions #themeToggle{font-size:0;padding:9px;width:38px}.top-actions #themeToggle::before{content:"☀";font-size:16px}.light-theme .top-actions #themeToggle::before{content:"☾"}.top-actions .avatar{display:none}.hamburger{display:grid}.menu-dropdown{right:0}.dropoff-btn{font-size:11px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important}.reveal{opacity:1;transform:none}}
+
+</style>
+</head>
+<body>
+<div class="app">
+<header class="topbar">
+  <div class="brand"><div class="logo">💧</div><div><h1>AquaMap</h1><small>Every drop counts</small></div></div>
+  <label class="search"><span>⌕</span><input id="searchInput" placeholder="Try Kukatpally, Banjara Hills, Gachibowli or filtration…" aria-label="Search locations" autocomplete="off" /><div class="search-results" id="searchResults"></div></label>
+  <div class="top-actions">
+    <button class="btn btn-light" id="imageSearchBtn" title="Search reference images">▧ Image search</button>
+    <button class="btn btn-light" id="themeToggle" aria-label="Switch to light theme" title="Toggle dark/light theme">☀ Light mode</button>
+    <button class="btn btn-light" id="shareBtn">↗ Share map</button>
+    <button class="btn btn-primary" id="addTop">＋ Add a water point</button>
+    <button class="icon-btn hamburger" id="menuToggle" aria-label="Open menu" aria-expanded="false">☰</button>
+    <div class="avatar" title="Community explorer">A</div>
+    <div class="menu-dropdown" id="menuDropdown">
+      <button type="button" id="menuImageSearch">▧ Search images</button>
+      <button type="button" id="menuDropoff">♻ Nearby drop-off points</button>
+      <button type="button" id="menuAdd">＋ Add a water point</button>
+      <button type="button" id="menuReport">⚑ Report an issue</button>
+    </div>
+  </div>
+</header>
+<section class="hero"><div><div class="eyebrow">SDG 6 · Clean water and sanitation</div><h2>Find water. See who has access.</h2><p>AquaMap brings public drinking-water points, filtration centres, wastewater reports and colony water-access information into one place.</p></div><div class="live-pill"><span class="dot"></span> Interactive prototype <span style="color:#64748b">·</span> Sample data</div></section>
+<div class="demo-banner"><span class="demo-icon">ⓘ</span><div><strong>Prototype preview — not live civic data</strong><span>Map pins, colony coverage, counts and impact figures are examples for demonstration. They must be verified before anyone relies on them.</span></div></div>
+<section class="stats" aria-label="Prototype overview">
+  <div class="stat"><div class="stat-icon">🚰</div><div><strong id="stationCount">25</strong><span>Sample water points</span></div></div>
+  <div class="stat"><div class="stat-icon">🏘️</div><div><strong>42</strong><span>Sample colony profiles</span></div></div>
+  <div class="stat"><div class="stat-icon">♻️</div><div><strong id="bottleCount">2,460</strong><span>Illustrative bottles saved</span></div></div>
+  <div class="stat"><div class="stat-icon">⚠️</div><div><strong id="issueCount">4</strong><span>Sample issue reports</span></div></div>
+</section>
+<main class="main">
+<section class="map-panel">
+  <div class="panel-head"><div><h3>Explore water locations</h3><p>Select a category to show or hide its map pins. Click any pin for details.</p></div><div class="map-tools"><button class="btn btn-light" id="mapModeBtn" title="Switch map style">Real map</button><button class="icon-btn" id="resetMap" title="Reset map view">⌖</button><button class="icon-btn" id="zoomIn" title="Zoom in">＋</button><button class="icon-btn" id="zoomOut" title="Zoom out">−</button></div></div>
+  <div class="layers" role="group" aria-label="Map layers">
+    <button class="layer active" data-layer="drinking"><span class="key"></span> Drinking-water refills</button>
+    <button class="layer active" data-layer="taps"><span class="key"></span> Public taps</button>
+    <button class="layer active" data-layer="kiosks"><span class="key"></span> Filtration centres</button>
+    <button class="layer active" data-layer="waste"><span class="key"></span> Leaks & wastewater</button>
+    <button class="layer" data-layer="colonies"><span class="key"></span> Colony access</button>
+  </div>
+  <div class="map-wrap" id="mapWrap">
+    <div id="realMap" aria-label="Interactive OpenStreetMap centered on Hyderabad" style="display:none;position:absolute;inset:0;z-index:1"></div>
+    <svg class="map-art" id="mapArt" viewBox="0 0 800 520" preserveAspectRatio="xMidYMid slice" aria-label="Illustrative map concept of Hyderabad neighbourhoods">
+      <rect width="800" height="520" fill="#050b14"/><path class="waterway" d="M-20 100 C140 145 150 60 260 115 S440 220 520 155 S690 65 830 105"/><path class="waterway" d="M-40 440 C100 365 180 460 280 390 S470 340 550 400 S710 480 850 410"/>
+      <path class="park" d="M25 30 L160 24 178 110 110 150 24 120Z"/><path class="park" d="M575 35 L735 35 760 115 675 145 595 110Z"/><path class="park" d="M590 335 L760 315 780 440 680 475 600 420Z"/><path class="park" d="M180 300 L275 285 310 350 260 395 175 370Z"/>
+      <g><path class="block" d="M205 35l82 5 18 54-72 30-43-34Z"/><path class="block2" d="M320 28l88 8 13 58-81 15-28-37Z"/><path class="block" d="M430 28l95 8 10 55-79 23-32-39Z"/><path class="block2" d="M40 180l95-20 25 58-75 38-47-24Z"/><path class="block" d="M200 150l78-18 28 53-58 40-55-23Z"/><path class="block2" d="M330 145l90-15 26 60-67 34-47-29Z"/><path class="block" d="M480 145l82-20 26 55-65 42-51-28Z"/><path class="block2" d="M630 170l100-14 24 57-80 36-50-26Z"/><path class="block" d="M40 290l90-23 28 56-63 44-54-25Z"/><path class="block2" d="M340 260l83-19 26 56-71 42-47-26Z"/><path class="block" d="M465 270l92-18 27 56-74 39-48-27Z"/><path class="block2" d="M60 405l86-19 22 57-70 35-43-27Z"/><path class="block" d="M330 415l90-18 26 57-73 36-46-28Z"/></g>
+      <g><path class="road" d="M-20 260 C100 245 180 275 270 250 S450 200 550 240 S700 285 830 250"/><path class="road" d="M170 -20 C180 100 240 150 250 230 S270 390 330 540"/><path class="road" d="M570 -20 C530 90 575 165 610 240 S640 400 700 540"/><path class="road" d="M-20 365 C120 330 190 370 290 360 S460 330 550 360 S700 390 830 350"/><path class="minor" d="M80 80 L120 175 190 205 175 290 210 355 170 440"/><path class="minor" d="M300 40 L350 125 325 210 380 275 400 370 460 470"/><path class="minor" d="M450 50 L480 120 450 185 485 250 465 320 520 420"/><path class="minor" d="M700 70 L670 145 710 210 680 290 730 360"/></g>
+      <g id="zones" style="display:none"><path class="zone" d="M25 160 L180 140 220 240 160 320 30 300Z"/><path class="zone" d="M280 35 L445 35 480 145 400 220 290 175Z"/><path class="zone-off" d="M500 240 L640 220 760 280 745 390 600 420 520 345Z"/><path class="zone-off" d="M180 350 L320 340 355 450 270 500 150 450Z"/></g>
+      <text x="44" y="25">NEIGHBOURHOOD PARK</text><text x="290" y="128">KUKATPALLY</text><text x="500" y="130">HITEC CITY</text><text x="50" y="255">JNTU AREA</text><text x="350" y="245">MIYAPUR ROAD</text><text x="630" y="230">GACHIBOWLI</text><text x="205" y="430">RESIDENTIAL COLONY</text><text x="570" y="455">WATER BODY</text>
+    </svg>
+    <div class="map-label" style="left:32%;top:23%">KUKATPALLY<small>Ward profile · demo</small></div>
+    <div class="map-label" style="left:62%;top:31%">HITEC CITY<small>Public amenities</small></div>
+    <div class="map-label" style="left:68%;top:61%">GACHIBOWLI<small>Supply coverage</small></div>
+    
+    <!-- Original Pins -->
+    <button class="pin drinking" data-type="drinking" data-name="Community RO Refill Point" data-place="Kukatpally Housing Board" data-status="Operational · Clean & tested" style="left:36%;top:40%" title="Community RO Refill Point" data-lat="17.4948" data-lng="78.3997"><span>💧</span></button>
+    <button class="pin taps" data-type="taps" data-name="Public Drinking Tap" data-place="JNTU Road, Kukatpally" data-status="Reported flowing today · Clear" style="left:19%;top:49%" title="Public Drinking Tap" data-lat="17.4933" data-lng="78.3914"><span>🚰</span></button>
+    <button class="pin kiosks" data-type="kiosks" data-name="Community Filtration Kiosk" data-place="HITEC City service lane" data-status="Operational · Filtered & clean" style="left:63%;top:39%" title="Community Filtration Kiosk" data-lat="17.4483" data-lng="78.3915"><span>🏪</span></button>
+    <button class="pin waste" data-type="waste" data-name="Drain overflow report" data-place="Gachibowli, near service road" data-status="Open report · Unclean / contaminated risk" style="left:76%;top:66%" title="Drain overflow report" data-lat="17.4401" data-lng="78.3489"><span>⚠</span></button>
+    <button class="pin drinking" data-type="drinking" data-name="Campus Water Refill" data-place="Near Miyapur Road" data-status="Operational · Clean RO water" style="left:46%;top:64%" title="Campus Water Refill" data-lat="17.4969" data-lng="78.3647"><span>💧</span></button>
+    <button class="pin taps" data-type="taps" data-name="Public Water Tap" data-place="Kukatpally park entrance" data-status="Flowing · Clean tap water" style="left:26%;top:24%" title="Public Water Tap" data-lat="17.5021" data-lng="78.4075"><span>🚰</span></button>
+    <button class="pin kiosks" data-type="kiosks" data-name="Water ATM / Filtration Centre" data-place="Gachibowli junction" data-status="Operational · UV filtered" style="left:82%;top:43%" title="Water ATM / Filtration Centre" data-lat="17.4485" data-lng="78.3512"><span>🏪</span></button>
+
+    <!-- Additional Hyderabad Locations -->
+    <button class="pin drinking" data-type="drinking" data-name="Banjara Hills RO Station" data-place="Road No. 12, Banjara Hills" data-status="Operational · Clean & safe" style="left:48%;top:48%" title="Banjara Hills RO Station" data-lat="17.4156" data-lng="78.4185"><span>💧</span></button>
+    <button class="pin taps" data-type="taps" data-name="Jubilee Hills Checkpost Tap" data-place="Road No. 36, Jubilee Hills" data-status="Flowing today · Clear water" style="left:53%;top:43%" title="Jubilee Hills Checkpost Tap" data-lat="17.4326" data-lng="78.4071"><span>🚰</span></button>
+    <button class="pin kiosks" data-type="kiosks" data-name="Ameerpet Water ATM" data-place="Near Metro Station, Ameerpet" data-status="Operational · Clean filtered" style="left:38%;top:32%" title="Ameerpet Water ATM" data-lat="17.4375" data-lng="78.4482"><span>🏪</span></button>
+    <button class="pin waste" data-type="waste" data-name="Main Pipeline Leak" data-place="SR Nagar Main Road" data-status="Reported leak · Murky / contaminated" style="left:34%;top:35%" title="Main Pipeline Leak" data-lat="17.4431" data-lng="78.4452"><span>⚠</span></button>
+    <button class="pin drinking" data-type="drinking" data-name="Madhapur Community Refill" data-place="Image Gardens Road, Madhapur" data-status="Operational · Clean" style="left:59%;top:45%" title="Madhapur Community Refill" data-lat="17.4481" data-lng="78.3902"><span>💧</span></button>
+    <button class="pin taps" data-type="taps" data-name="Secunderabad Station Public Tap" data-place="Platform 1 exit area" data-status="Flowing · Treated municipal water" style="left:56%;top:18%" title="Secunderabad Station Public Tap" data-lat="17.4340" data-lng="78.5011"><span>🚰</span></button>
+    <button class="pin kiosks" data-type="kiosks" data-name="Begumpet Jal Board Kiosk" data-place="Near Flyover, Begumpet" data-status="Active · Clean drinking water" style="left:45%;top:26%" title="Begumpet Jal Board Kiosk" data-lat="17.4449" data-lng="78.4659"><span>🏪</span></button>
+    <button class="pin waste" data-type="waste" data-name="Drainage Overflow" data-place="Kondapur Main Road" data-status="Unclean · Standing wastewater" style="left:70%;top:58%" title="Drainage Overflow" data-lat="17.4716" data-lng="78.3614"><span>⚠</span></button>
+    <button class="pin drinking" data-type="drinking" data-name="Gachibowli Stadium Water Station" data-place="Indoor Stadium Gate, Gachibowli" data-status="Operational · Clean RO" style="left:78%;top:53%" title="Gachibowli Stadium Water Station" data-lat="17.4488" data-lng="78.3533"><span>💧</span></button>
+    <button class="pin taps" data-type="taps" data-name="Tolichowki Community Tap" data-place="Main Road, Tolichowki" data-status="Intermittent flow · Check before drinking" style="left:42%;top:55%" title="Tolichowki Community Tap" data-lat="17.4044" data-lng="78.4121"><span>🚰</span></button>
+    <button class="pin kiosks" data-type="kiosks" data-name="Mehdipatnam Water Kiosk" data-place="Rythu Bazaar area, Mehdipatnam" data-status="Operational · Filtered clean" style="left:39%;top:59%" title="Mehdipatnam Water Kiosk" data-lat="17.3950" data-lng="78.4385"><span>🏪</span></button>
+    <button class="pin drinking" data-type="drinking" data-name="LB Nagar Metro RO Refill" data-place="Near Metro Station, LB Nagar" data-status="Operational · Clean" style="left:88%;top:75%" title="LB Nagar Metro RO Refill" data-lat="17.3457" data-lng="78.5522"><span>💧</span></button>
+    <button class="pin taps" data-type="taps" data-name="Dilsukhnagar Public Tap" data-place="Near Bus Depot, Dilsukhnagar" data-status="Flowing today · Treated water" style="left:80%;top:70%" title="Dilsukhnagar Public Tap" data-lat="17.3685" data-lng="78.5255"><span>🚰</span></button>
+    <button class="pin waste" data-type="waste" data-name="Street Valve Leak" data-place="Kothapet X Roads" data-status="Leak reported · Water waste" style="left:84%;top:72%" title="Street Valve Leak" data-lat="17.3690" data-lng="78.5361"><span>⚠</span></button>
+    <button class="pin kiosks" data-type="kiosks" data-name="Uppal Ring Road Water ATM" data-place="Uppal Cross Roads" data-status="Operational · Clean purified" style="left:92%;top:45%" title="Uppal Ring Road Water ATM" data-lat="17.3992" data-lng="78.5582"><span>🏪</span></button>
+    <button class="pin drinking" data-type="drinking" data-name="Habsiguda Community Refill" data-place="St. Ann school lane, Habsiguda" data-status="Operational · Clean" style="left:89%;top:38%" title="Habsiguda Community Refill" data-lat="17.4082" data-lng="78.5485"><span>💧</span></button>
+    <button class="pin taps" data-type="taps" data-name="Tarnaka Public Tap" data-place="Near Osmania University gate" data-status="Flowing · Clean tap" style="left:82%;top:35%" title="Tarnaka Public Tap" data-lat="17.4278" data-lng="78.5385"><span>🚰</span></button>
+    <button class="pin waste" data-type="waste" data-name="Sewerage Overflow" data-place="Miyapur X Roads" data-status="Unclean · Contaminated area" style="left:38%;top:75%" title="Sewerage Overflow" data-lat="17.4968" data-lng="78.3510"><span>⚠</span></button>
+    <button class="pin kiosks" data-type="kiosks" data-name="Kukatpally Bus Depot Kiosk" data-place="KPHB Colony Phase 3" data-status="Operational · Clean" style="left:31%;top:45%" title="Kukatpally Bus Depot Kiosk" data-lat="17.4850" data-lng="78.4012"><span>🏪</span></button>
+
+    <div class="map-legend"><div class="legend-item"><span class="legend-dot" style="background:var(--blue)"></span> Drinking water</div><div class="legend-item"><span class="legend-dot" style="background:var(--green)"></span> Public tap</div><div class="legend-item"><span class="legend-dot" style="background:var(--purple)"></span> Filtration centre</div><div class="legend-item"><span class="legend-dot" style="background:var(--red)"></span> Waste / issue</div></div>
+    <div class="map-fab"><button class="fab" id="locateBtn" title="Center map">◎</button><button class="fab report" id="reportFab" title="Report a water issue">＋</button></div>
+  </div>
+  <div class="detail" id="locationDetail">
+    <div>
+      <h4 id="detailName">Community RO Refill Point</h4>
+      <p id="detailPlace">Kukatpally Housing Board · Community-listed location</p>
+      <p id="detailStatus" style="margin-top:5px">Operational · Clean water source</p>
+    </div>
+    <span class="status" id="detailBadge">● Drinking water</span>
+    <div class="detail-actions">
+      <button class="btn btn-primary" id="directionsBtn">↗ Get directions</button>
+      <button class="btn btn-light" id="verifyBtn">✓ Confirm status</button>
+      <button class="btn btn-light" id="reportBtn">⚑ Report issue</button>
+    </div>
+  </div>
+</section>
+<aside class="side-panel">
+  <section class="side-section"><div class="side-title"><h3>Example locations</h3><button id="viewAll">View all ↗</button></div>
+    <div class="station" data-pin="0"><div class="station-icon">💧</div><div><h4>Community RO Refill Point</h4><p>Kukatpally Housing Board<br><span style="color:var(--green)">● Clean / Operational</span></p></div><div class="distance">0.4 km</div></div>
+    <div class="station" data-pin="1"><div class="station-icon">🚰</div><div><h4>Public Drinking Tap</h4><p>JNTU Road, Kukatpally<br><span style="color:var(--teal)">● Flowing / Clear</span></p></div><div class="distance">0.8 km</div></div>
+    <div class="station" data-pin="2"><div class="station-icon">🏪</div><div><h4>Filtration Kiosk</h4><p>HITEC City service lane<br><span style="color:var(--green)">● Filtered & Clean</span></p></div><div class="distance">2.1 km</div></div>
+    <div class="notice"><strong>ⓘ Check before you drink</strong><p>Map listings are demo/community data. A location being listed does not guarantee that water is potable or currently available.</p></div>
+    <button class="btn btn-primary dropoff-btn" id="dropoffBtn" style="width:100%;margin-top:12px">♻ Nearby drop-off points on Google Maps ↗</button>
+  </section>
+  <section class="side-section"><div class="side-title"><h3>Colony water access</h3><button id="coverageToggle">Show map layer</button></div><p style="font-size:11px;color:var(--muted);line-height:1.6;margin:0 0 13px">Compare example areas with reported pipeline access against areas that may rely on tankers. These percentages are placeholders, not measured Hyderabad coverage.</p>
+    <div style="display:flex;align-items:center;gap:9px;margin:10px 0"><span style="height:11px;width:11px;border-radius:3px;background:var(--teal)"></span><div style="flex:1;font-size:11px;font-weight:700">Example: pipeline access</div><strong style="font-size:12px;color:var(--white)">68%</strong></div>
+    <div style="height:6px;background:#111c33;border-radius:8px;overflow:hidden"><div style="width:68%;height:100%;background:var(--teal);border-radius:8px"></div></div>
+    <div style="display:flex;align-items:center;gap:9px;margin:15px 0 10px"><span style="height:11px;width:11px;border-radius:3px;background:var(--orange)"></span><div style="flex:1;font-size:11px;font-weight:700">Example: tanker / unknown</div><strong style="font-size:12px;color:var(--white)">32%</strong></div>
+    <div style="height:6px;background:#111c33;border-radius:8px;overflow:hidden"><div style="width:32%;height:100%;background:var(--orange);border-radius:8px"></div></div>
+    <button class="btn btn-light" id="colonyBtn" style="width:100%;margin-top:16px">Explore colony coverage →</button><div class="data-actions"><button class="btn btn-light" id="exportBtn">Export reports (CSV)</button><button class="btn btn-light" id="clearDemoBtn">Clear saved demo entries</button></div><p class="small-note">New entries are saved in this browser only. They are not sent to a city authority or shared with other users.</p>
+  </section>
+  <section class="side-section"><div class="impact-card"><div class="mini">Illustrative impact</div><strong id="impactNumber">2,460 bottles</strong><p>Example counter only. A live version would calculate this from verified refill activity, not guesses.</p><div class="progress"><span></span></div><p style="margin-top:8px">Example progress only · not live</p></div></section>
+</aside>
+</main>
+<footer class="footer"><span><strong>AquaMap</strong> · A water-access concept for SDG 6.</span><span>Demo map only · no live GPS, official supply records or water-safety certification.</span></footer>
+<nav class="mobile-nav"><button class="active" id="navMap"><span>⌖</span>Explore</button><button id="navImpact"><span>♻</span>Impact</button><button id="navAdd"><span>＋</span>Contribute</button><button id="navReports"><span>⚑</span>Reports</button></nav>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="modal-backdrop" id="modalBackdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal-head"><h3 id="modalTitle">Add a water point</h3><button class="close" id="closeModal" aria-label="Close">×</button></div><p id="modalIntro">Add a proposed location or issue to this demo. In a live service, submissions would be reviewed before being marked verified.</p><form id="reportForm"><label class="field" for="entryType">What are you adding?</label><select id="entryType"><option value="drinking">Drinking water / refill station</option><option value="taps">Public tap</option><option value="kiosks">Filtration centre / Water ATM</option><option value="waste">Wastewater, leak or overflow issue</option><option value="colony">Colony water access update</option></select><label class="field" for="entryName">Name or short description</label><input id="entryName" required placeholder="e.g. Public tap near the park" /><label class="field" for="entryPlace">Colony / landmark</label><input id="entryPlace" required placeholder="e.g. Kukatpally, near bus stop" /><div class="form-row"><div><label class="field" for="entryLat">Latitude (optional)</label><input id="entryLat" type="number" step="any" min="-90" max="90" placeholder="17.3850" /></div><div><label class="field" for="entryLng">Longitude (optional)</label><input id="entryLng" type="number" step="any" min="-180" max="180" placeholder="78.4867" /></div></div><button class="btn btn-light" type="button" id="useMyLocation" style="width:100%;margin:5px 0 12px">◎ Use my current location</button><label class="field" for="entryStatus">Current status & Cleanliness</label><select id="entryStatus"><option>Operational · Clean & tested</option><option>Flowing today · Clear water</option><option>Not working / no water</option><option>Leak or overflow · Unclean / contaminated risk</option><option>Pipeline access reported</option><option>Unknown — needs verification</option></select><label class="field" for="entryNotes">Additional details (optional)</label><textarea id="entryNotes" placeholder="When was it last checked? Any helpful context?"></textarea><button class="btn btn-primary" type="submit">Add to demo map →</button></form></div></div>
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];let selectedPin=$('.pin'), zoom=1, addedPointCount=0;const toastEl=$('#toast');let toastTimer;
+function toast(msg){toastEl.textContent=msg;toastEl.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toastEl.classList.remove('show'),2800)}
+
+function selectPin(pin){
+  if(!pin)return;
+  $$('.pin').forEach(p=>p.classList.remove('selected'));
+  pin.classList.add('selected');
+  selectedPin=pin;
+  
+  // Update details panel with location name, place, water type, and cleanliness/operational status
+  $('#detailName').textContent=pin.dataset.name;
+  $('#detailPlace').textContent=pin.dataset.place;
+  $('#detailStatus').textContent=pin.dataset.status+' · Community-reported status.';
+  
+  let labels={
+    drinking:'Drinking-water refill',
+    taps:'Public tap',
+    kiosks:'Filtration centre',
+    waste:'Leak / wastewater issue'
+  };
+  
+  let type=pin.dataset.type;
+  $('#detailBadge').textContent='● '+(labels[type]||'Water point');
+  
+  if(type==='waste'){
+    $('#detailBadge').style.background='#450a0a55';
+    $('#detailBadge').style.color='#f87171';
+    $('#detailBadge').style.borderColor='#ef444455';
+  } else {
+    $('#detailBadge').style.background='#064e3b55';
+    $('#detailBadge').style.color='#34d399';
+    $('#detailBadge').style.borderColor='#10b98155';
+  }
+}
+
+$$('.pin').forEach(p=>p.addEventListener('click',()=>selectPin(p)));
+$$('.station').forEach((s,i)=>s.addEventListener('click',()=>{let pins=$$('.pin:not(.hidden)');let target=pins.find(p=>p.dataset.name===s.querySelector('h4').textContent)||$$('.pin')[i];selectPin(target);$('#locationDetail').scrollIntoView({behavior:'smooth',block:'nearest'})}));
+$$('.layer').forEach(btn=>btn.addEventListener('click',()=>{let layer=btn.dataset.layer;btn.classList.toggle('active');if(layer==='colonies'){$('#zones').style.display=btn.classList.contains('active')?'block':'none';toast(btn.classList.contains('active')?'Colony coverage layer enabled — illustrative demo zones.':'Colony coverage layer hidden.');return}$$('.pin').filter(p=>p.dataset.type===layer).forEach(p=>p.classList.toggle('hidden',!btn.classList.contains('active')))}));
+function toggleCoverage(){let b=$('.layer[data-layer="colonies"]');if(!b.classList.contains('active'))b.click();else{b.classList.remove('active');$('#zones').style.display='none';toast('Colony coverage layer hidden.')}}$('#coverageToggle').addEventListener('click',toggleCoverage);$('#colonyBtn').addEventListener('click',()=>{let b=$('.layer[data-layer="colonies"]');if(!b.classList.contains('active'))b.click();$('#mapWrap').scrollIntoView({behavior:'smooth',block:'center'});toast('Coverage layer uses illustrative sample data.')});
+$('#zoomIn').addEventListener('click',()=>{if(realMapOn)return;zoom=Math.min(1.35,zoom+.1);$('#mapArt').style.transform=`scale(${zoom})`;$('#mapArt').style.transformOrigin='center';toast('Map zoomed in.')});$('#zoomOut').addEventListener('click',()=>{if(realMapOn)return;zoom=Math.max(.85,zoom-.1);$('#mapArt').style.transform=`scale(${zoom})`;$('#mapArt').style.transformOrigin='center';toast('Map zoomed out.')});$('#resetMap').addEventListener('click',()=>{if(realMapOn)return;zoom=1;$('#mapArt').style.transform='scale(1)';toast('Map view reset.')});$('#shareBtn').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(location.href);toast('Page link copied.')}catch(e){toast('Share this prototype using your browser address bar.')}});
+function openModal(type='add'){if(type==='report'){$('#modalTitle').textContent='Report a water issue';$('#modalIntro').textContent='Report a broken tap, suspected water-quality issue, leak or overflow.';$('#entryType').value='waste';$('#entryStatus').value='Leak or overflow · Unclean / contaminated risk'}else{$('#modalTitle').textContent='Add a water point';$('#modalIntro').textContent='Add a proposed location or issue to this demo.'}$('#modalBackdrop').classList.add('open');setTimeout(()=>$('#entryName').focus(),100)}function closeModal(){$('#modalBackdrop').classList.remove('open')}$('#addTop').addEventListener('click',()=>openModal());$('#navAdd').addEventListener('click',()=>openModal());$('#reportFab').addEventListener('click',()=>openModal('report'));$('#reportBtn').addEventListener('click',()=>openModal('report'));$('#closeModal').addEventListener('click',closeModal);$('#modalBackdrop').addEventListener('click',e=>{if(e.target===$('#modalBackdrop'))closeModal()});document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
+$('#verifyBtn').addEventListener('click',()=>{if(!selectedPin)return;selectedPin.dataset.status='Community confirmation submitted · not independently verified';selectPin(selectedPin);persistEntriesForSelected();toast('Thanks — your confirmation is reflected in this demo.')});$('#viewAll').addEventListener('click',()=>{let all=$$('.pin').filter(p=>!p.classList.contains('hidden'));toast(all.length+' visible points in this map.');});$('#navMap').addEventListener('click',()=>window.scrollTo({top:0,behavior:'smooth'}));$('#navImpact').addEventListener('click',()=>{$('#impactNumber').scrollIntoView({behavior:'smooth',block:'center'});toast('Impact figures are illustrative demo metrics.')});$('#navReports').addEventListener('click',()=>openModal('report'));
+
+/* Browser persistence, real map, live search, export and geolocation */
+const STORAGE_KEY='aquamap_saved_points_v2';
+let savedEntries=[];
+try{savedEntries=JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]');if(!Array.isArray(savedEntries))savedEntries=[]}catch(e){savedEntries=[]}
+let leafletMap=null, leafletMarkers=[], realMapOn=false;
+const categoryLabel={drinking:'Drinking-water refill',taps:'Public tap',kiosks:'Filtration centre',waste:'Leak / wastewater report'};
+const categoryColor={drinking:'#38bdf8',taps:'#10b981',kiosks:'#a855f7',waste:'#ef4444'};
+function persistEntriesForSelected(){if(selectedPin?.dataset.saved==='true'){const match=savedEntries.find(e=>e.name===selectedPin.dataset.name&&e.place===selectedPin.dataset.place);if(match){match.status=selectedPin.dataset.status;persistEntries()}}}
+function persistEntries(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(savedEntries))}catch(e){toast('Browser storage unavailable.')}}
+function escapeHTML(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function getAllPoints(){return $$('.pin').map((p,i)=>({name:p.dataset.name,place:p.dataset.place,status:p.dataset.status,type:p.dataset.type,lat:Number(p.dataset.lat)||null,lng:Number(p.dataset.lng)||null,el:p,index:i}))} function refreshStats(){const n=$$('.pin').length;$('#stationCount').textContent=String(n);const issueCount=$$('.pin[data-type="waste"]').length;const statIssue=$('#issueCount');if(statIssue)statIssue.textContent=String(issueCount);renderSearchResults($('#searchInput').value)}
+function addSavedToMap(entry){
+  const pin=document.createElement('button');pin.className='pin '+entry.type;pin.dataset.type=entry.type;pin.dataset.name=entry.name;pin.dataset.place=entry.place;pin.dataset.status=entry.status;pin.dataset.saved='true';
+  if(entry.lat!=null&&entry.lng!=null){pin.dataset.lat=entry.lat;pin.dataset.lng=entry.lng}
+  const pos=entry.lat!=null&&entry.lng!=null?{x:50+((entry.lng-78.4867)*18),y:50-((entry.lat-17.385)*18)}:[{x:54,y:48},{x:43,y:30},{x:57,y:70},{x:30,y:70},{x:72,y:52}][addedPointCount++%5];
+  pin.style.left=Math.max(7,Math.min(93,pos.x))+'%';pin.style.top=Math.max(8,Math.min(90,pos.y))+'%';pin.title=entry.name;
+  pin.innerHTML='<span>'+(entry.type==='waste'?'⚠':entry.type==='taps'?'🚰':entry.type==='kiosks'?'🏪':'💧')+'</span>';
+  $('#mapWrap').appendChild(pin);pin.addEventListener('click',()=>selectPin(pin));
+  const layer=$('.layer[data-layer="'+entry.type+'"]');if(layer&&!layer.classList.contains('active')){layer.classList.add('active');pin.classList.remove('hidden')}
+  if(realMapOn){addLeafletMarker(entry,pin);pin.style.display='none';syncLeafletLayers()}
+  return pin;
+}
+function renderSearchResults(query){
+  const box=$('#searchResults');if(!box)return;const q=(query||'').trim().toLowerCase();
+  if(!q){box.style.display='none';box.innerHTML='';return}
+  const matches=getAllPoints().filter(p=>(p.name+' '+p.place+' '+p.status+' '+(categoryLabel[p.type]||'')).toLowerCase().includes(q)).slice(0,7);
+  box.innerHTML=matches.length?matches.map((p,i)=>'<button type="button" data-search-index="'+i+'">'+escapeHTML(p.name)+'<small>'+escapeHTML(p.place)+' · '+escapeHTML(categoryLabel[p.type]||'Colony update')+'</small></button>').join(''):'<div class="empty-results">No matching sample points found.</div>';
+  box.style.display='block';
+  [...box.querySelectorAll('button')].forEach((b,i)=>b.addEventListener('click',()=>{const m=matches[i];if(m.el){const layer=$('.layer[data-layer="'+m.type+'"]');if(layer&&!layer.classList.contains('active'))layer.click();selectPin(m.el)}else{const pin=addSavedToMap(m);selectPin(pin)}box.style.display='none';$('#searchInput').value=m.name;$('#locationDetail').scrollIntoView({behavior:'smooth',block:'nearest'})})); } function initLeaflet(){ if(leafletMap||!window.L)return; leafletMap=L.map('realMap',{attributionControl:false}).setView([17.385,78.4867],11); L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap & CartoDB'}).addTo(leafletMap); $$('.pin').forEach(pin=>addLeafletMarker({name:pin.dataset.name,place:pin.dataset.place,status:pin.dataset.status,type:pin.dataset.type,lat:Number(pin.dataset.lat)||null,lng:Number(pin.dataset.lng)||null},pin));
+
+  setTimeout(()=>leafletMap.invalidateSize(),150);
+}
+function addLeafletMarker(entry,pin){
+  if(!leafletMap||entry.lat==null||entry.lng==null)return;
+  const marker=L.circleMarker([entry.lat,entry.lng],{radius:8,color:'#0b1325',weight:2,fillColor:categoryColor[entry.type]||'#38bdf8',fillOpacity:.95});
+  marker.bindPopup('<strong>'+escapeHTML(entry.name)+'</strong><br>'+escapeHTML(entry.place)+'<br><small>'+escapeHTML(entry.status)+'</small>');
+  marker.addTo(leafletMap);leafletMarkers.push({marker,type:entry.type,pin});
+  marker.on('click',()=>{if(pin)selectPin(pin);$('#detailName').textContent=entry.name;$('#detailPlace').textContent=entry.place;$('#detailStatus').textContent=entry.status;$('#detailBadge').textContent='● '+(categoryLabel[entry.type]||'Water point')});
+}
+$('#mapModeBtn').addEventListener('click',()=>{
+  if(!realMapOn&&!window.L){toast('Real map needs internet access to load the map library.');return}realMapOn=!realMapOn;$('#mapModeBtn').textContent=realMapOn?'Illustrated map':'Real map';
+  $('#realMap').style.display=realMapOn?'block':'none';
+  $('#mapArt').style.display=realMapOn?'none':'block'; $$('.pin').forEach(p=>p.style.display=realMapOn?'none':'');
+  $('.map-legend').style.display=realMapOn?'none':'flex'; if(realMapOn){initLeaflet();if(leafletMap){syncLeafletLayers();setTimeout(()=>leafletMap.invalidateSize(),100);}toast('Real map enabled with dark mode theme.')} }); $$('.layer').forEach(btn=>btn.addEventListener('click',()=>{if(realMapOn)syncLeafletLayers()}));
+function syncLeafletLayers(){leafletMarkers.forEach(o=>{const b=$('.layer[data-layer="'+o.type+'"]');const show=b?b.classList.contains('active'):true;if(show){if(!leafletMap.hasLayer(o.marker))o.marker.addTo(leafletMap)}else if(leafletMap.hasLayer(o.marker))leafletMap.removeLayer(o.marker)})}
+$('#searchInput').addEventListener('input',e=>renderSearchResults(e.target.value));$('#searchInput').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();$('#searchResults button')?.click()}});
+document.addEventListener('click',e=>{if(!e.target.closest('.search'))$('#searchResults').style.display='none'});
+$('#searchInput').addEventListener('keydown',e=>{if(e.key==='Escape')$('#searchResults').style.display='none'});
+$('#resetMap').addEventListener('click',()=>{if(realMapOn&&leafletMap)leafletMap.setView([17.385,78.4867],11)});
+$('#zoomIn').addEventListener('click',()=>{if(realMapOn&&leafletMap)leafletMap.zoomIn()});
+$('#zoomOut').addEventListener('click',()=>{if(realMapOn&&leafletMap)leafletMap.zoomOut()});
+$('#locateBtn').addEventListener('click',()=>{
+  if(!navigator.geolocation){toast('Geolocation not supported.');return}
+  toast('Requesting location permission…');
+  navigator.geolocation.getCurrentPosition(pos=>{const lat=pos.coords.latitude,lng=pos.coords.longitude;if(realMapOn&&leafletMap)leafletMap.setView([lat,lng],15);else toast('Your location found. Switch to Real map to view it.');if(realMapOn&&leafletMap)L.circleMarker([lat,lng],{radius:8,color:'#fff',weight:3,fillColor:'#38bdf8',fillOpacity:1}).addTo(leafletMap).bindPopup('Your current location').openPopup();},()=>toast('Location permission denied.'),{enableHighAccuracy:true,timeout:10000});
+});
+$('#useMyLocation').addEventListener('click',()=>{
+  if(!navigator.geolocation){toast('Location not supported.');return}
+  navigator.geolocation.getCurrentPosition(pos=>{$('#entryLat').value=pos.coords.latitude.toFixed(6);$('#entryLng').value=pos.coords.longitude.toFixed(6);toast('Coordinates filled in.')},()=>toast('Could not access location.'),{enableHighAccuracy:true,timeout:10000});
+});
+$('#reportForm').addEventListener('submit',e=>{
+  e.preventDefault();
+  const name=$('#entryName').value.trim(),place=$('#entryPlace').value.trim();
+  if(!name||!place)return;
+  const type=$('#entryType').value==='colony'?'taps':$('#entryType').value;
+  const lat=$('#entryLat').value.trim(),lng=$('#entryLng').value.trim();
+  if((lat==='') !== (lng==='')){toast('Enter both coordinates or leave both blank.');return}
+  const entry={name,place,type,status:$('#entryStatus').value+' · awaiting verification',lat:lat===''?null:Number(lat),lng:lng===''?null:Number(lng),notes:$('#entryNotes').value.trim(),createdAt:new Date().toISOString()};
+  savedEntries.push(entry);persistEntries();
+  const pin=addSavedToMap(entry);selectPin(pin);refreshStats();
+  $('#reportForm').reset();closeModal();toast('Entry saved in this browser.');
+});
+$('#exportBtn').addEventListener('click',()=>{
+  const rows=[['name','place','category','status','latitude','longitude','notes','created_at']];
+  getAllPoints().forEach(p=>rows.push([p.name,p.place,p.type,p.status,p.lat??'',p.lng??'',p.notes??'',p.createdAt??'']));
+  const csv=rows.map(row=>row.map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(',')).join('\r\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='aquamap-community-reports.csv';a.click();URL.revokeObjectURL(url);toast('CSV exported successfully.');
+});
+$('#clearDemoBtn').addEventListener('click',()=>{ if(!confirm('Remove saved entries from this browser?'))return; savedEntries=[];persistEntries();$$('.pin[data-saved="true"]').forEach(p=>p.remove());leafletMarkers.filter(o=>o.pin?.dataset.saved==='true').forEach(o=>{if(leafletMap)leafletMap.removeLayer(o.marker)});leafletMarkers=leafletMarkers.filter(o=>o.pin?.dataset.saved!=='true');refreshStats();toast('Saved demo entries cleared.');
+});
+$('#directionsBtn').addEventListener('click',()=>{
+  if(realMapOn&&leafletMap&&selectedPin?.dataset.lat&&selectedPin?.dataset.lng){window.open('https://www.google.com/maps/dir/?api=1&destination='+selectedPin.dataset.lat+','+selectedPin.dataset.lng,'_blank','noopener');return}
+  const q=encodeURIComponent((selectedPin?.dataset.place||'Hyderabad')+' '+(selectedPin?.dataset.name||''));window.open('https://www.google.com/maps/search/?api=1&query='+q,'_blank','noopener')
+});
+savedEntries.forEach(entry=>addSavedToMap(entry));
+refreshStats();
+selectPin(selectedPin);
+</script>
+</body>
+</html>
